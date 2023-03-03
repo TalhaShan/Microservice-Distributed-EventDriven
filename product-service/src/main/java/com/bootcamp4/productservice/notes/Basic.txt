@@ -1,0 +1,257 @@
+1) order service //in C
+2) product-service //in C
+3) configuration-service //in D
+4) discovery-service //in D
+5) microservice-bootcamp4-config-server //in D
+6) api-gateway-service //in D
+7) inventory-service
+8) Notification-Service //in D
+//Total 7 so far
+
+//Start an application ///
+Run discovery,config then - >>>
+Remember start vault dev server-> vault server -dev
+add json files-> vault kv put secret/product-service @product-service.json
+update token value in both product and order and inventory
+start keycloak will be on 8080 -> C:\Program Files\keycloak-21.0.0\bin>kc.bat start-dev -Djboss.http.port = 8180
+so either move this to diff or api gateway to different because both by default 8080
+if you move keycloak then change in properties as well.
+To get keycloak properties of your client
+http://localhost:8080/realms/microservice-project-realm/.well-known/openid-configuration
+
+Run zipkin jar
+
+///Notes///
+https://programmingtechie.com/2021/03/25/spring-boot-microservices-project-tutorial-part-2/
+https://programmingtechie.com/2021/03/24/spring-boot-microservices-project-tutorial-part-1/
+1. As there can be multiple service and multiple instance of one service as we want multiple order service for product
+so every to make it connect do we need to change url? NO nO we need Eureka discovery server to automatically discover the available services.
+2. This process is called Service Registry
+3. How to make a eureka server just add @EnableEurekaServer
+4. Commonly used port number for Eureka server is  8761
+5. To create a eureka client we need to add netflix eureka client dependency in our client service i.e. Product,Order
+6. With @EnableEurekaClient
+7. #Can be multiple instance of this service so asking spring to assign random free port
+   server.port=0
+   #How to discover instance uniquely
+   eureka.instance.instance-id=${spring.application.name}:${random.uuid}
+8. @EnableEurekaClient is deprecated just add the app-name in application.properties discovery server will auto-detect.
+9. Our configuration should be at one place so maintain config server with GitHub, or we can use HashiCropVault
+10. Add @EnableConfigServer in main class
+11. Default port for config server is 8888
+12. using this properties config server will clone the repo on start
+spring.cloud.config.server.git.clone-on-start=true
+13. configuration serivce clone a repo that have config information order-service and product-service properites
+and we can access that through "http://localhost:8888/order-service/default"  // where default is profile//order-service is file name
+14. Now as we want these properites to be used at order or product service which  we move to config server
+we need to add
+    <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-config-client</artifactId>
+            <version>4.0.1</version>
+        </dependency>
+
+and
+  <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-bootstrap</artifactId>
+            <version>4.0.1</version>
+  </dependency>
+
+These will help, bootstrap will help reading bootstrap properites at the time of bootstrap  application
+
+15. Add the file(bootstarp.properites) with property "spring.cloud.config.uri=http://localhost:8888" in order-service and product-service
+This file will contact config  server that contain all the db and other url properties of order service to get info
+
+16. @RefreshScope this will refresh the bean when call with  actuator/refresh
+so use case is if we change anything on git file  on config server and call actuator/refresh it will auto reflect the changes
+without restarting the application
+17. add actuator properties in both order and product and add this in bootstarp.properites
+management.endpoints.web.exposure.include=*
+
+18. when we call refresh /actuator/refresh we should see changes in response array
+[
+    "config.client.version",
+    "test.name"
+]
+like test.name changes
+
+19.Now we gonna store sensitive info in vault hashicrop
+downlaod and run vault.exe // vault server -dev
+then set vault address // set VAULT_ADDR=http://127.0.0.1:8200
+
+20. Create a json file with values
+{
+  "spring.datasource.username":"root",
+  "spring.datasource.password":"xxxx"
+}  //dont push it to git lolxD
+//put key value using command
+//vault kv put secret/order-service @order-service.json
+//vault kv put secret/product-service @product-service.json
+21. To show stored values
+vault kv get secret/order-service
+22. Every time we restart pc start hashicrop dev server and initalize json file with above command
+23. Now to make use vault in spring add
+  <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-vault-config</artifactId>
+            <version>4.0.0</version>
+        </dependency>
+24. and then add vault config properties in bootstrap.properties file
+spring.cloud.vault.host=localhost
+spring.cloud.vault.port=8200
+spring.cloud.vault.scheme=http
+spring.cloud.vault.authentication=TOKEN
+#When start server you get it
+spring.cloud.vault.token=hvs.y72KQyBzxDZFXUmW7eSusoSY
+spring.cloud.vault.application-name=product-service
+
+
+25. Now as we know we are usig spring boot actuator and refresh scope to do property change but what if we had
+100 microservice do we call refresh on all off course not, so we will make use of Cloud bus and RabbitMQ ampq to make
+real time changes without refreshing manually
+
+add dependency
+     <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-bus-amqp</artifactId>
+            <version>4.0.1</version>
+        </dependency>
+
+26. THen we add mq properties and now
+spring.rabbitmq.host=localhost
+spring.rabbitmq.port=5672
+spring.rabbitmq.username=guest
+spring.rabbitmq.password=guest
+
+27. and after that
+http://localhost:49558/actuator/busrefresh // this end point will communicate changes to all service, ps port is of any service like product
+
+28. Now we will make api gateway, which  means we made a new service with dependency
+
+    <dependency>
+			<groupId>org.springframework.cloud</groupId>
+			<artifactId>spring-cloud-starter-gateway</artifactId>
+		</dependency>
+
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+            <version>4.0.0</version>
+        </dependency>
+also add eureka client dependency to get this register.
+
+
+29. Then in app.prop of gateway
+spring.application.name=api-gateway
+spring.cloud.gateway.discovery.locator.enabled=true //similar to @EnableEurekaClient
+spring.cloud.gateway.discovery.locator.lower-case-service-id=true
+spring.cloud.gateway.routes[0].id=product-service
+#We cannot define port as our service is on random so we add lb load-balance prefix to that.
+spring.cloud.gateway.routes[0].uri.=lb://product-service
+#Redirect request to this if contain api/product,predicate key-value parie where path is key
+spring.cloud.gateway.routes[0].predicates[0]=Path=/api/product
+
+
+30.If we run we will notice it will use Netty started on port 8080  as embedded server because spring cloud api gateway
+is mainly built on project reactor help us in write reactive application
+
+31. Now we have install KeyCloak AND RUN IT
+we need to make new realm realm is like a container where you can store client user and app info
+we will register our gateway as client in realm on keycloak.
+
+32. Create realm setting and user in keycloak
+33. add following dependency in api gateway
+   <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+34. add in api gateway prop
+#manage jwt from openid connect keycloak #issuer field
+spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:8080/realms/microservice-project-realm
+
+35. Next we will config security in api gateway
+36. next we will declare product-service as oauth resource
+add these in product
+    <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-oauth2-resource-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-oauth2-jose</artifactId>
+            <version>5.7.7</version>
+        </dependency>
+and add
+spring.security.oauth2.resourceserver.jwt.issuer-uri=http://localhost:8080/realms/microservice-project-realm
+in prop
+
+37. Now we will mmake Inventory--service and make it oauth resource adding all dependence
+38. Jakarta - javax.persistence and webadpater changed read
+39. Webclient non blocking request won't wait for response
+40. We will use openfeignclient for interservice communication
+41. @EmableFeignClient IN MAIN
+42. TO interact inventory service in order service we define InventoryClient in order service
+@FeignClient(name = "inventory-service")
+public interface InventoryClient {
+    @GetMapping("/api/inventory/{skuCode}")
+    Boolean checkStock(@PathVariable String skuCode);
+}
+//this all in order-service
+as name should application-name in properties.
+43. As we are using feign client so we need token ase well so for that we need
+request interceptor
+44. We are using ciruclt break for resilience
+  @PostConstruct
+    public void enableAuthenticationContextOnSpawnedThreads() {
+        SecurityContextHolder.setStrategyName(SecurityContextHolder.MODE_INHERITABLETHREADLOCAL);
+    }
+
+this make sure securitycontext enable in spawn thread of resilence 4j
+45. Now we add notification service for communication we will add rabbiMQ order will communicate with notifcation
+46. Notification service is the consumer service
+47. order service is the producer of the message
+48. This all called spring cloud stream working with binders where binder in our case is rabbitMQ
+add this in order (output binder)
+# out is  for output where as 0 index can be multiple queue output
+spring.cloud.stream.bindings.notificationEventSupplier-out-0.destination=notification-events
+spring.cloud.stream.source=notificationEventSupplier
+49. We will use stream bridge for sending order
+In code level
+50. streamBridge.send("notificationEventSupplier-out-0", MessageBuilder.withPayload(order.getId()).build());4
+51. Now we will make notification service consumer or destination in app.properties
+spring.cloud.stream.bindings.notificationEventSupplier-in-0.destination=notification-events
+"notification-service" channel name same in both order and notification service
+52 . Trace id same along all the request
+52. If we are using zipkin and seluth and we have trace id changing due to executor thread then we can implent
+bean to stop that
+  @Bean
+    public ExecutorService traceableExecutorService() {
+        ExecutorService executorService = Executors.newCachedThreadPool();
+        return new TraceableExecutorService(beanFactory, executorService);
+    }
+53. Trace id is getting different in notification service due to async communication,
+so to stop that add this in order-service.properites
+spring.sleuth.integration.enabled=true
+to get same trace id in it.
+
+53. To see all this in dashboard we have zipkin
+spring.zipkin.base-url=http://localhost:9411/
+spring.sleuth.sampler.probability=1
+
+probability=1 means to catch all without ignoring any thing
+
+54. Implement elk and logback.xml with encode
+  <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>6.6</version>
+        </dependency>
